@@ -1,0 +1,100 @@
+name: Build WebRTC for Android with H.265
+
+on:
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: "Chrome milestone whose WebRTC branch to build"
+        default: "152"
+        required: true
+      archs:
+        description: "Android ABIs, space separated"
+        default: "armeabi-v7a"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/local/.ghcup /usr/share/swift /opt/microsoft /opt/google/chrome \
+            /usr/local/share/powershell /usr/lib/jvm/temurin-8* || true
+          sudo docker image prune --all --force || true
+          sudo swapoff -a && sudo rm -f /mnt/swapfile || true
+          df -h / /mnt
+
+      - name: Resolve the WebRTC branch
+        id: branch
+        run: |
+          branch=$(curl -s "https://chromiumdash.appspot.com/fetch_milestones?mstone=${{ inputs.milestone }}" | jq -r '.[0].webrtc_branch')
+          test -n "$branch" && test "$branch" != "null"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "WebRTC branch-heads/$branch for M${{ inputs.milestone }}"
+
+      - name: Fetch WebRTC
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$HOME/depot_tools"
+          export PATH="$HOME/depot_tools:$PATH"
+          # Whichever disk has more room: the runner image leaves varying space on / and /mnt.
+          root_free=$(df --output=avail / | tail -1); mnt_free=$(df --output=avail /mnt | tail -1)
+          if [ "$mnt_free" -gt "$root_free" ]; then dir=/mnt/webrtc; else dir="$HOME/webrtc"; fi
+          sudo mkdir -p "$dir" && sudo chown "$USER" "$dir" && cd "$dir"
+          cat > .gclient <<GCLIENT
+          solutions = [{
+            "name": "src",
+            "url": "https://webrtc.googlesource.com/src.git@refs/branch-heads/${{ steps.branch.outputs.branch }}",
+            "deps_file": "DEPS",
+            "managed": False,
+            "custom_deps": {},
+          }]
+          target_os = ["android"]
+          GCLIENT
+          gclient sync --no-history --shallow --nohooks -j 8
+          gclient runhooks
+          echo "WEBRTC_ROOT=$PWD" >> "$GITHUB_ENV"
+          df -h / /mnt
+
+      - name: Install build dependencies
+        run: |
+          cd "$WEBRTC_ROOT/src"
+          sudo ./build/install-build-deps.sh --android --no-prompt --no-chromeos-fonts || \
+            sudo ./build/install-build-deps.sh --android --no-prompt
+
+      - name: Build the AAR
+        run: |
+          export PATH="$HOME/depot_tools:$PATH"
+          cd "$WEBRTC_ROOT/src"
+          python3 tools_webrtc/android/build_aar.py \
+            --output "$WEBRTC_ROOT/libwebrtc-h265.aar" \
+            --build-dir "$WEBRTC_ROOT/out" \
+            --arch ${{ inputs.archs }} \
+            --extra-gn-args 'is_debug=false' 'rtc_use_h265=true' 'rtc_include_tests=false' 'rtc_build_examples=false' 'treat_warnings_as_errors=false' 'symbol_level=0'
+          ls -la "$WEBRTC_ROOT"
+          df -h / /mnt
+
+      - name: Check H.265 is in the build
+        run: |
+          cd "$WEBRTC_ROOT"
+          mkdir -p check && cd check && unzip -o -q ../libwebrtc-h265.aar
+          for so in jni/*/libjingle_peerconnection_so.so; do
+            echo "$so: $(strings "$so" | grep -ci 'h265') strings mentioning H265"
+          done
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$WEBRTC_ROOT"
+          cp src/LICENSE LICENSE-webrtc && cp src/PATENTS PATENTS-webrtc
+          tag="m${{ inputs.milestone }}-${{ steps.branch.outputs.branch }}-$(date +%Y%m%d%H%M)"
+          gh release create "$tag" libwebrtc-h265.aar LICENSE-webrtc PATENTS-webrtc \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "WebRTC M${{ inputs.milestone }} (branch-heads/${{ steps.branch.outputs.branch }}) with H.265, ${{ inputs.archs }}" \
+            --notes "Built from https://webrtc.googlesource.com/src/+/refs/branch-heads/${{ steps.branch.outputs.branch }} with rtc_use_h265=true, is_debug=false, archs: ${{ inputs.archs }}."
