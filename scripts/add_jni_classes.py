@@ -32,21 +32,37 @@ def main(out_dir: str, aar_path: str) -> int:
     with zipfile.ZipFile(io.BytesIO(entries["classes.jar"])) as classes:
         merged = {name: classes.read(name) for name in classes.namelist()}
 
+    # GEN_JNI, the class every proxy calls into, is generated more than once: a
+    # registration target per native library, some covering only part of the Java
+    # code. Taking the first one found gave NoSuchMethodError on
+    # GEN_JNI.org_webrtc_PeerConnectionFactory_initializeAndroidGlobals. The copy
+    # with the most methods - the largest - is the one generated for the whole SDK.
     added = 0
+    gen_jni = {}
     for root, _, files in os.walk(out_dir):
         for name in files:
             if not name.endswith(".jar"):
                 continue
+            path = os.path.join(root, name)
             try:
-                jar = zipfile.ZipFile(os.path.join(root, name))
+                jar = zipfile.ZipFile(path)
             except zipfile.BadZipFile:
                 continue
             with jar:
                 for entry in jar.namelist():
+                    if entry.endswith("/GEN_JNI.class"):
+                        data = jar.read(entry)
+                        if len(data) > len(gen_jni.get(entry, (b"", ""))[0]):
+                            gen_jni[entry] = (data, path)
+                        continue
                     if entry in merged or not wanted(entry):
                         continue
                     merged[entry] = jar.read(entry)
                     added += 1
+    for entry, (data, path) in gen_jni.items():
+        print(f"{entry}: {len(data)} bytes from {path}")
+        merged[entry] = data
+        added += 1
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as classes:
