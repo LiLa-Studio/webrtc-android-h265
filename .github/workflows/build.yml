@@ -73,7 +73,7 @@ jobs:
           cd "$WEBRTC_ROOT/src"
           python3 tools_webrtc/android/build_aar.py \
             --output "$WEBRTC_ROOT/libwebrtc-h265.aar" \
-            --build-dir "$WEBRTC_ROOT/out" \
+            --build-dir "$WEBRTC_ROOT/src/out/aar" \
             --arch ${{ inputs.archs }} \
             --extra-gn-args 'is_debug=false' 'rtc_use_h265=true' 'rtc_include_tests=false' 'rtc_build_examples=false' 'treat_warnings_as_errors=false' 'symbol_level=0'
           ls -la "$WEBRTC_ROOT"
