@@ -30,6 +30,12 @@ import tempfile
 import zipfile
 
 
+# Natives of Java classes whose native half is not linked into libjingle_peerconnection_so:
+# the AV1 software encoder (libaom) is built for desktop only. Calling one throws
+# UnsatisfiedLinkError, as it would with Google's own build; nothing else may be missing.
+OPTIONAL_NATIVE_PREFIXES = ("org_webrtc_LibaomAv1Encoder_",)
+
+
 def wanted(entry: str) -> bool:
     if not entry.endswith(".class") or entry.endswith("/GEN_JNI.class"):
         return False
@@ -161,8 +167,12 @@ def main(out_dir: str, aar_path: str) -> int:
         if not entry.endswith("/libjingle_peerconnection_so.so"):
             continue
         symbols = dynamic_symbols(data)
-        missing = [m for m in natives if jni_symbol("org/jni_zero/GEN_JNI", m) not in symbols]
-        print(f"{entry}: {len(natives) - len(missing)} of {len(natives)} GEN_JNI natives exported")
+        absent = [m for m in natives if jni_symbol("org/jni_zero/GEN_JNI", m) not in symbols]
+        optional = [m for m in absent if m.startswith(OPTIONAL_NATIVE_PREFIXES)]
+        missing = [m for m in absent if m not in optional]
+        if optional:
+            print(f"{entry}: not linked, as expected: {optional}")
+        print(f"{entry}: {len(natives) - len(absent)} of {len(natives)} GEN_JNI natives exported")
         if missing:
             print(f"  missing, e.g. {missing[:5]}; exported JNI names look like "
                   f"{sorted(s for s in symbols if s.startswith('Java_'))[:5]}", file=sys.stderr)
