@@ -74,6 +74,22 @@ def main(out_dir: str, aar_path: str) -> int:
             aar.writestr(name, data)
 
     print(f"added {added} generated JNI classes")
+    gen = merged.get("org/jni_zero/GEN_JNI.class", b"")
+    if b"org_webrtc_PeerConnectionFactory_initializeAndroidGlobals" not in gen:
+        print("GEN_JNI lacks the PeerConnectionFactory proxies; GEN_JNI sources in the build:", file=sys.stderr)
+        for root, _, files in os.walk(out_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                if name.endswith(".srcjar"):
+                    try:
+                        with zipfile.ZipFile(path) as z:
+                            for e in z.namelist():
+                                if e.endswith("GEN_JNI.java"):
+                                    size = len(z.read(e))
+                                    print(f"  {path}: {e} {size} bytes", file=sys.stderr)
+                    except zipfile.BadZipFile:
+                        continue
+        return 1
     if "org/webrtc/PeerConnectionFactoryJni.class" not in merged:
         print("org/webrtc/PeerConnectionFactoryJni.class is still missing", file=sys.stderr)
         # Say where it does exist, if anywhere, so the next attempt knows where to look.
