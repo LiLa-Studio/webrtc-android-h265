@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
+      - uses: actions/checkout@v4
+
       - name: Free disk space
         run: |
           df -h /
@@ -78,6 +80,11 @@ jobs:
             --extra-gn-args 'is_debug=false' 'rtc_use_h265=true' 'rtc_include_tests=false' 'rtc_build_examples=false' 'treat_warnings_as_errors=false' 'symbol_level=0'
           ls -la "$WEBRTC_ROOT"
           df -h / /mnt
+
+      - name: Add the generated JNI classes
+        run: |
+          arch=$(echo "${{ inputs.archs }}" | cut -d' ' -f1)
+          python3 "$GITHUB_WORKSPACE/scripts/add_jni_classes.py" "$WEBRTC_ROOT/src/out/aar/$arch" "$WEBRTC_ROOT/libwebrtc-h265.aar"
 
       - name: Check H.265 is in the build
         run: |
